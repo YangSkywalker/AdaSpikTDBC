@@ -3,7 +3,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from spikingjelly.activation_based import neuron, functional, layer, surrogate, base
 
 
