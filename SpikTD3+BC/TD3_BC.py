@@ -47,6 +47,7 @@ class Actor(nn.Module):
 			NonSpikingLIFNode(tau=2.0)
 		)
 
+		
 		self.max_action = max_action
 		self.T = T
 
