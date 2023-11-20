@@ -102,7 +102,6 @@ if __name__ == "__main__":
         else:
             print(f"The pretrained model will be stored under path: ./models/{args.env}/pretrain; The finetuned model will be stored under path: ./models/{args.env}/finetune")
 
-    # seeding and setup env
     env = gym.make(args.env)
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -116,14 +115,8 @@ if __name__ == "__main__":
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0] 
     max_action = float(env.action_space.high[0])
-
-
-    # init d4rl_buffer
     d4rl_replay_buffer = utils.ReplayBuffer(state_dim, action_dim)
     d4rl_replay_buffer.convert_D4RL(d4rl.qlearning_dataset(env))    # fill buffer
-
-
-    # init policy
     kwargs = {
         "state_dim": state_dim, 
         "action_dim": action_dim,
@@ -140,9 +133,6 @@ if __name__ == "__main__":
     }
     policy = redq_bc.REDQ_BC(**kwargs)
 
-
-    ########## Load or Pretrain the model with d4rl dataset. ##########
-    # load/pretrain policy
     if args.load_policy_id != "":
         policy_file = f'{args.policy}_{args.env}' if args.load_policy_id == "default" else f'{args.policy}_T={args.T}_{args.env}_{args.seed}_{args.load_policy_id}'
         policy.load(f"./models/{args.env}/pretrain/{policy_file}")
@@ -168,12 +158,10 @@ if __name__ == "__main__":
             # save policy
             if args.save_model: policy.save(f'./models/{args.env}/pretrain/{run_name}')
 
-    ########## Begin to finetune the model ##########
     state, done = env.reset(), False
     episode_timesteps = 0
     update_info, eval_info = {}, {}
 
-    # distill dataset
     buffer = utils.ReplayBuffer(state_dim, action_dim, max_size=int(args.max_timesteps))
     buffer.distill(d4rl.qlearning_dataset(env), args.env, args.sample_method, args.sample_ratio)
     del d4rl_replay_buffer  # to save memory
@@ -186,16 +174,13 @@ if __name__ == "__main__":
     # finetune
     with wandb.init(project='adaptive_bc', group=args.env, job_type="finetune", name=run_name):
         wandb.config.update(args)
-
-        # init last_R, current_R and target_R
-        # last_R ranges from 0 to 1
+        # m = 1
         if args.use_r_max:
             last_R = utils.eval_policy(policy, args.env, args.seed, eval_episodes=1)['evaluation'] / max_R
         else: 
             last_R  = utils.eval_policy(policy, args.env, args.seed, eval_episodes=1)['d4rl']*0.01 
-
-        current_R = last_R
-        target_R = 1.05
+        current_R = last_R  # at the beginning, the current return is equal to the average return
+        target_R = 1.03     # expected return 
 
         finetune_evaluations = {'d4rl': [], 'evaluation': [], 'length': []}  
         episode_return = 0.
@@ -232,14 +217,12 @@ if __name__ == "__main__":
                 else:
                     current_R = env.get_normalized_score(episode_return)
 
-                policy.alpha += episode_timesteps * (- args.Kp * (target_R - last_R)
-                                + args.Kd * max(0, last_R - current_R))
-                # clip the alpha value between 0.0 and 0.4
-                policy.alpha = max(0., min(policy.alpha, args.alpha_finetune))
-
-                # moving average
-                last_R = 0.05 * current_R + 0.95 * last_R
-                
+                if current_R < last_R:
+                    policy.alpha += args.Kp * (last_R - current_R)
+                else:
+                    policy.alpha += args.Kd * (last_R - target_R)
+                policy.alpha = max(0., min(policy.alpha, args.alpha_finetune)) # clip the adaptive alpha value between 0.0 and alpha
+                last_R = 0.05 * current_R + 0.95 * last_R   # the moving average return
                 episode_timesteps = 0
                 episode_return = 0.
             
